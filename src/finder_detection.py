@@ -34,7 +34,7 @@ def group_candidates(candidates):
     
     # group the candidates by their x coordinate
     candidates.sort(key=lambda x: x[0]) # sort by x coordinate
-    grouped_vertically = []
+    grouped_horizontally = []
     current_group = []
 
     for i in range(len(candidates)):
@@ -44,13 +44,13 @@ def group_candidates(candidates):
             if abs(candidates[i][0] - candidates[i-1][0]) < 3: # if the distance between the two candidates is less than 3, add them to the same group
                 current_group.append(candidates[i])
             else:
-                grouped_vertically.append(current_group)
+                grouped_horizontally.append(current_group)
                 current_group = [candidates[i]]
 
-    grouped_vertically.append(current_group) # add the last group
-    grouped_horizontally = []
+    grouped_horizontally.append(current_group) # add the last group
+    final_grouped = []
 
-    for group in grouped_vertically:
+    for group in grouped_horizontally:
         group.sort(key=lambda x: x[1])
         current_group = []
 
@@ -61,14 +61,102 @@ def group_candidates(candidates):
                 if abs(group[i][1] - group[i-1][1]) < (group[i][2] * 3) / 7: # if the distance between the two candidates is less than 3, add them to the same group
                     current_group.append(group[i])
                 else:
-                    grouped_horizontally.append(current_group)
+                    final_grouped.append(current_group)
                     current_group = [group[i]]
 
-        grouped_horizontally.append(current_group) # add the last group
+        final_grouped.append(current_group) # add the last group
 
     # remove duplicates
-    grouped_horizontally = [list(set(group)) for group in grouped_horizontally]
-    return grouped_horizontally
+    final_grouped = [list(set(group)) for group in final_grouped]
+    finders = []
+
+    for centroid in final_grouped:
+        average_x, average_y, average_w = 0, 0, 0
+        for x, y, w in centroid:
+            average_x += x
+            average_y += y
+            average_w += w
+
+        average_x /= len(centroid)
+        average_y /= len(centroid)
+        average_w /= len(centroid)
+
+        finders.append((average_x, average_y, average_w))
+
+    return finders
+
+def verify_vertically(finders, binary_img):
+    verified = []
+
+    for Cx, Cy, Cw in finders:
+        y1 = Cy - (4.5 * Cw) / 7
+        y2 = Cy + (4.5 * Cw) / 7
+        y1 = max(0, min(y1, binary_img.shape[0] - 1))
+        y2 = max(0, min(y2, binary_img.shape[0] - 1))
+
+        x1 = Cx - Cw / 7
+        x2 = Cx + Cw / 7
+        x1 = max(0, min(x1, binary_img.shape[1] - 1))
+        x2 = max(0, min(x2, binary_img.shape[1] - 1))
+
+        for x in range(int(x1), int(x2)):
+            run = []
+            run_colors = []
+            count = 0
+            current_color = binary_img[int(y1), int(x)]
+
+            for y in range(int(y1), int(y2)):
+                pixel = binary_img[y, int(x)]
+                if pixel == current_color:
+                    count += 1
+                else:
+                    run.append(count)
+                    run_colors.append(current_color)
+                    current_color = pixel
+                    count = 1
+
+            run.append(count)
+            run_colors.append(current_color)
+
+            for i in range(len(run) - 4): # len(run) - 4 to avoid index out of range, each finder pattern has 5 color variations - B -> W -> B -> W -> B
+                runs = run[i:i+5]
+                run_color = run_colors[i:i+5]
+
+                if run_color == [0, 255, 0, 255, 0]: # check that the pattern matches the expected colors (cant start with white)
+                    if confirm_pattern(runs):
+                        verified.append((Cx, Cy, Cw))
+
+    return verified
+
+def get_neighbors(x, y):
+    return [(x-1, y-1), (x-1, y), (x-1, y+1),
+            (x  , y-1),           (x  , y+1),
+            (x+1, y-1), (x+1, y), (x+1, y+1)]
+
+def flood_fill(binary_img, x, y, color, visited=None):
+    """
+    flood fill algorithm to find the area of a pattern
+    """
+    if visited is None:
+        visited = set()
+
+    pixels_around = get_neighbors(x, y)
+
+    for Px, Py in pixels_around:
+        Px = int(Px)
+        Py = int(Py)
+
+        if (Px, Py) in visited:
+            continue
+
+        if Px < 0 or Px >= binary_img.shape[1] or Py < 0 or Py >= binary_img.shape[0]:
+            continue
+
+        if int(binary_img[Py, Px]) == color:
+            visited.add((Px, Py))
+            flood_fill(binary_img, Px, Py, color, visited)
+
+    return visited
 
 def find_finder_patterns(binary_img):
     """
@@ -117,8 +205,18 @@ def find_finder_patterns(binary_img):
 
         # now group the patterns vertically and horizontally
     candidates = group_candidates(candidates)
+    verified = verify_vertically(candidates, binary_img)
+    verified = group_candidates(verified) # group the verified patterns again to remove duplicates
+    blobs = []
 
-    for x in candidates:
-       x.sort(key=lambda x: x[1])
-       print(x)
+    for Fx, Fy, _ in verified:
+        cells = flood_fill(binary_img, Fx, Fy, 0) # flood fill to find the area of the pattern
+        area = len(cells)
+
+        Cx = sum([x for x, _ in cells]) / area
+        Cy = sum([y for _, y in cells]) / area
+
+        blobs.append((Cx, Cy, area))
+
+    print("blobs", blobs)
 

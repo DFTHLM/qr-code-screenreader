@@ -3,7 +3,7 @@ import sys
 import cv2 as cv
 
 def main():
-    img = cv.imread("qr_hello.png", cv.IMREAD_GRAYSCALE)
+    img = cv.imread("../qr_real_world.png", cv.IMREAD_GRAYSCALE)
     _, binary = cv.threshold(img, 127, 255, cv.THRESH_BINARY)
 
     if img is None:
