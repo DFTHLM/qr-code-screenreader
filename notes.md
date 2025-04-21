@@ -14,6 +14,7 @@
 
 ### Reed-Solomon in details:
 
+
 - ## Data encoding modes:
     - **Numeric**      |0|0|0|0| (0) - 0-9, 10 bits per 3 digits
     - **Alphanumeric** |0|0|0|1| (1) - 0-9, A-Z, space, $, %, *, +, -, ., /, :, 11 bits per 2 characters
