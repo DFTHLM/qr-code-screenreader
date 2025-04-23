@@ -4,10 +4,12 @@ import cv2 as cv
 
 def main():
     img = cv.imread("../qr_real_world.png", cv.IMREAD_GRAYSCALE)
-    _, binary = cv.threshold(img, 127, 255, cv.THRESH_BINARY)
 
     if img is None:
         sys.exit("Could not read the image.")
+
+    binary = img.copy()
+    _, binary = cv.threshold(img, 127, 255, cv.THRESH_BINARY)
 
     finders = ip.getFinders(binary)
 

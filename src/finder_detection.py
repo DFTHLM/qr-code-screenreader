@@ -1,4 +1,43 @@
 # finder pattern detection algorithm from https://pmc.ncbi.nlm.nih.gov/articles/PMC8321072/#sec3-jimaging-06-00067
+import multiprocessing as mp
+
+def scan_column(binary_img, y, w):
+    """
+    slides a window across the image to find patterns
+    that match the basic finder pattern structure.
+    """
+    candidates = []
+    run_lengths = []
+    colors = []
+    current_color = binary_img[y, 0]
+    count = 0
+
+    for x in range(w): # move the window across the image
+        pixel = binary_img[y, x]
+        if pixel == current_color:
+            count += 1
+        else:   # color change -> save the count and the color of the run, count = 1 as we move to the following pixel
+            run_lengths.append(count)
+            colors.append(current_color)
+            current_color = pixel
+            count = 1
+
+    # save the last run
+    run_lengths.append(count)
+    colors.append(current_color)
+
+    for i in range(len(run_lengths) - 4): # len(run_lengths) - 4 to avoid index out of range, each finder pattern has 5 color variations - B -> W -> B -> W -> B
+        runs = run_lengths[i:i+5]
+        run_colors = colors[i:i+5]
+
+        if run_colors == [0, 255, 0, 255, 0]: # check that the pattern matches the expected colors (cant start with white)
+            if confirm_pattern(runs): # if the pattern matches the expected structure, append the center of the pattern to the candidates list
+                x_center = sum(runs[:2]) + runs[2] / 2 + sum(runs[3:4])
+                x_pixel = int(sum(run_lengths[:i]) + x_center)
+                candidates.append((x_pixel, y, sum(runs)))
+
+    if len(candidates) != 0:
+        return candidates
 
 def confirm_pattern(run_lengths, tolerance=1.5, middle_tolerance=2.0): # works only when assuming the pattern is B | W | B | W | B (which it should be)
     """
@@ -128,95 +167,87 @@ def verify_vertically(finders, binary_img):
 
     return verified
 
-def get_neighbors(x, y):
-    return [(x-1, y-1), (x-1, y), (x-1, y+1),
-            (x  , y-1),           (x  , y+1),
-            (x+1, y-1), (x+1, y), (x+1, y+1)]
-
 def flood_fill(binary_img, x, y, color, visited=None):
     """
     flood fill algorithm to find the area of a pattern
+    now iterative because recursion hit the limit
+    there was no reason to use recursion except that i like it
     """
-    if visited is None:
-        visited = set()
+    visited = set()
+    stack = [(x, y)]
 
-    pixels_around = get_neighbors(x, y)
+    height, width = binary_img.shape
 
-    for Px, Py in pixels_around:
-        Px = int(Px)
-        Py = int(Py)
+    while stack:
+        cx, cy = stack.pop()
+        cx, cy = int(cx), int(cy)
 
-        if (Px, Py) in visited:
+        if (cx, cy) in visited:
             continue
 
-        if Px < 0 or Px >= binary_img.shape[1] or Py < 0 or Py >= binary_img.shape[0]:
-            continue
-
-        if int(binary_img[Py, Px]) == color:
-            visited.add((Px, Py))
-            flood_fill(binary_img, Px, Py, color, visited)
+        if 0 <= cx < width and 0 <= cy < height and binary_img[cy, cx] == color:
+            visited.add((cx, cy))
+            # Add 8-connected neighbors
+            stack.extend([
+                (cx-1, cy-1), (cx, cy-1), (cx+1, cy-1),
+                (cx-1, cy  ),             (cx+1, cy  ),
+                (cx-1, cy+1), (cx, cy+1), (cx+1, cy+1)
+            ])
 
     return visited
 
+def get_center_area(binary_img, x, y, color):
+    pointcloud = flood_fill(binary_img, x, y, color) # flood fill to find the area of the pattern
+    area = len(pointcloud)
+
+    probe_x = x
+    probe_y = y
+
+    x, y = zip(*pointcloud)
+
+    Cx = int(sum(x) / len(x))
+    Cy = int(sum(y) / len(y))
+    
+    while binary_img[probe_y, probe_x] == color:
+        probe_x += 1
+
+    return probe_x, probe_y, Cx, Cy, area
+
+def find_centroids(data):
+    binary_img, candidate = data
+    Fx, Fy, _ = candidate
+
+    probe_x = int(Fx)
+    probe_y = int(Fy)
+
+    probe_x, probe_y, Cx, Cy, area = get_center_area(binary_img, probe_x, probe_y, 0)
+    center1 = (Cx, Cy, area)
+
+    probe_x, probe_y, Cx, Cy, area = get_center_area(binary_img, int(probe_x), int(probe_y), 255)
+    center2 = (Cx, Cy, area)
+
+    probe_x, probe_y, Cx, Cy, area = get_center_area(binary_img, int(probe_x), int(probe_y), 0)
+    center3 = (Cx, Cy, area)
+
+    return (center1, center2, center3)
+
 def find_finder_patterns(binary_img):
-    """
-    slides a window across the image to find patterns
-    that match the basic finder pattern structure.
-
-    colors is a list of colors in the pattern
-    run_lengths is a list of the lengths of the runs - a run is a continuous path of the same color
-    count is the number of pixels of the same color in a straight line
-
-    run 2x - once on normal image, then rotate 90 degrees and run again to find vertical and horiznontal patterns
-
-    """
     h, w = binary_img.shape
-    candidates = []
 
-    for y in range(h): # iterate over each column
-        run_lengths = []
-        colors = []
-        current_color = binary_img[y, 0]
-        count = 0
+    with mp.Pool(mp.cpu_count()) as pool:
+        candidates = pool.starmap(scan_column, [(binary_img, y, w) for y in range(h)])
 
-        for x in range(w): # move the window across the image
-            pixel = binary_img[y, x]
-            if pixel == current_color:
-                count += 1
-            else:   # color change -> save the count and the color of the run, count = 1 as we move to the following pixel
-                run_lengths.append(count)
-                colors.append(current_color)
-                current_color = pixel
-                count = 1
+    flattened_candidates = []
+    for sublist in candidates:
+        if sublist is not None:
+            flattened_candidates.extend(sublist)
 
-        # save the last run
-        run_lengths.append(count)
-        colors.append(current_color)
+    flattened_candidates = group_candidates(flattened_candidates)
+    flattened_candidates = verify_vertically(flattened_candidates, binary_img)
+    flattened_candidates = group_candidates(flattened_candidates)
 
-        for i in range(len(run_lengths) - 4): # len(run_lengths) - 4 to avoid index out of range, each finder pattern has 5 color variations - B -> W -> B -> W -> B
-            runs = run_lengths[i:i+5]
-            run_colors = colors[i:i+5]
+    with mp.Pool(mp.cpu_count()) as pool:
+        results = pool.map(find_centroids, [(binary_img, candidate) for candidate in flattened_candidates])
 
-            if run_colors == [0, 255, 0, 255, 0]: # check that the pattern matches the expected colors (cant start with white)
-                if confirm_pattern(runs): # if the pattern matches the expected structure, append the center of the pattern to the candidates list
-                    x_center = sum(runs[:2]) + runs[2] / 2 + sum(runs[3:4])
-                    x_pixel = int(sum(run_lengths[:i]) + x_center)
-                    candidates.append((x_pixel, y, sum(runs)))
-
-        # now group the patterns vertically and horizontally
-    candidates = group_candidates(candidates)
-    verified = verify_vertically(candidates, binary_img)
-    verified = group_candidates(verified) # group the verified patterns again to remove duplicates
-    blobs = []
-
-    for Fx, Fy, _ in verified:
-        cells = flood_fill(binary_img, Fx, Fy, 0) # flood fill to find the area of the pattern
-        area = len(cells)
-
-        Cx = sum([x for x, _ in cells]) / area
-        Cy = sum([y for _, y in cells]) / area
-
-        blobs.append((Cx, Cy, area))
-
-    print("blobs", blobs)
+    print("results", results)
 
